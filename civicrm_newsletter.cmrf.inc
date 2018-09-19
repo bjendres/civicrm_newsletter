@@ -59,6 +59,56 @@ function _civicrm_newsletter_send_call($entity, $action, $parameters = array(), 
 }
 
 /**
+ * Retrieves the CiviCRM contact hash of a Drupal user for local CiviMRF
+ * connectors.
+ *
+ * @param int | NULL $user_id
+ *   The Drupal user ID. Defaults to the currently logged-in user.
+ *
+ * @return array | NULL
+ *   The contact hash for the CiviCRM contact associated to the Drupal user with
+ *   the given ID.
+ */
+function _civicrm_newsletter_get_contact_hash($user_id = NULL) {
+  $cmrf_connector = _civicrm_newsletter_get_connector_id(_civicrm_newsletter_get_cmrf_profile());
+  $cmrf_core = cmrf_core_get_core();
+  try {
+    $cmrf_profile = $cmrf_core->getConnectionProfile($cmrf_connector);
+    if ($cmrf_profile['connector'] != 'local') {
+      $return = NULL;
+    }
+  }
+  catch (\Exception $exception) {
+    $return = NULL;
+  }
+
+  if (!$user_id) {
+    global $user;
+    $user_id = $user->uid;
+  }
+  $params = array(
+    'uf_id' => $user_id,
+    'api.Contact.getsingle' => array('return' => array('hash')),
+  );
+  $call = _civicrm_newsletter_send_call(
+    'UFMatch',
+    'getsingle',
+    $params,
+    array(),
+    _civicrm_newsletter_get_cmrf_profile()
+  );
+  $reply = $call->getReply();
+  if (!empty($reply['is_error'])) {
+    $return = NULL;
+  }
+  else {
+    $return = $reply['api.Contact.getsingle']['hash'];
+  }
+
+  return $return;
+}
+
+/**
  * Retrieves the configuration for an Advanced Newsletter Management profile
  * from CiviCRM.
  *
@@ -99,7 +149,7 @@ function _civicrm_newsletter_profile_get($profile_name = NULL) {
 /**
  * Retrieves the subscription status for a given contact hash.
  *
- * @param string | NULL $profile_name
+ * @param string | NULL $profile
  *   The name of the Advanced Newsletter Management profile to retrieve, or NULL
  *   to retrieve all configured Advanced Newsletter Management profiles.
  *

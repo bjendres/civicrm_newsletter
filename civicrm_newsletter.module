@@ -22,7 +22,7 @@ function civicrm_newsletter_menu() {
     'access callback' => '_civicrm_newsletter_access',
     'access arguments' => array('_civicrm_newsletter_subscription_form', 2),
   );
-  $items['civicrm_newsletter/preferences/%/%'] = array(
+  $items['civicrm_newsletter/preferences/%'] = array(
     'title' => 'CiviCRM newsletters preferences',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('_civicrm_newsletter_preferences_form', 2, 3),
@@ -237,116 +237,122 @@ function _civicrm_newsletter_subscription_form_submit($form, &$form_state) {
 /**
  * Builds the preferences form for a CiviCRM contact.
  */
-function _civicrm_newsletter_preferences_form($form, &$form_state, $profile_name, $contact_hash) {
+function _civicrm_newsletter_preferences_form($form, &$form_state, $profile_name, $contact_hash = NULL) {
   module_load_include('inc', 'civicrm_newsletter', 'civicrm_newsletter.cmrf');
 
   // Retrieve CiviCRM Advanced Newsletter Management extension configuration for
   // given profile.
   if (!$profile = _civicrm_newsletter_profile_get($profile_name)) {
     drupal_not_found();
+    drupal_exit();
   }
-  else {
-    // Set page title according to received configuration.
-    if ($profile['form_title']) {
-      drupal_set_title($profile['form_title']);
-    }
 
-    // Include the Advanced Newsletter Management profile name.
-    $form['profile'] = array(
-      '#type' => 'value',
-      '#value' => $profile_name,
+  // Retrieve contact hash from logged-in user's contact for local CiviMRF
+  // connector.
+  if (!$contact_hash && !$contact_hash = _civicrm_newsletter_get_contact_hash()) {
+    drupal_not_found();
+    drupal_exit();
+  }
+
+  // Set page title according to received configuration.
+  if ($profile['form_title']) {
+    drupal_set_title($profile['form_title']);
+  }
+
+  // Include the Advanced Newsletter Management profile name.
+  $form['profile'] = array(
+    '#type' => 'value',
+    '#value' => $profile_name,
+  );
+
+  // Retrieve subscription status for contact.
+  if (!$subscription = civicrm_newsletter_subscription_get($profile_name, $contact_hash)) {
+    drupal_set_message(
+      t('Could not retrieve the newsletter subscription status. Please request a new confirmation link.'),
+      'warning'
     );
+    drupal_goto('civicrm_newsletter/request_link/' . $profile_name);
+  }
 
-    // Retrieve subscription status for contact.
-    if (!$subscription = civicrm_newsletter_subscription_get($profile_name, $contact_hash)) {
-      drupal_set_message(
-        t('Could not retrieve the newsletter subscription status. Please request a new confirmation link.'),
-        'warning'
-      );
-      drupal_goto('civicrm_newsletter/request_link/' . $profile_name);
-    }
-    else {
-      // Automatically confirm pending subscriptions.
-      $result = _civicrm_newsletter_subscription_autoconfirm(array(
-        'contact_id' => $subscription['contact']['id'],
-        'contact_hash' => $subscription['contact']['hash'],
-        'profile' => $profile_name,
-      ));
-      if (!empty($result['is_error'])) {
-        // The API call returned an error, rebuild the form and notify the user.
-        drupal_set_message(t('Your confirmation could not be submitted, please try again later.'), 'error');
-        $form_state['rebuild'] = TRUE;
-      }
-      elseif (!empty($result['values'])) {
-        drupal_set_message(t('Your confirmation has been successfully submitted. You will receive an e-mail with a summary of your subscriptions.'));
-      }
+  // Automatically confirm pending subscriptions.
+  $result = _civicrm_newsletter_subscription_autoconfirm(array(
+    'contact_id' => $subscription['contact']['id'],
+    'contact_hash' => $subscription['contact']['hash'],
+    'profile' => $profile_name,
+  ));
+  if (!empty($result['is_error'])) {
+    // The API call returned an error, rebuild the form and notify the user.
+    drupal_set_message(t('Your confirmation could not be submitted, please try again later.'), 'error');
+    $form_state['rebuild'] = TRUE;
+  }
+  elseif (!empty($result['values'])) {
+    drupal_set_message(t('Your confirmation has been successfully submitted. You will receive an e-mail with a summary of your subscriptions.'));
+  }
 
-      $form['contact_hash'] = array(
-        '#type' => 'value',
-        '#value' => $subscription['contact']['hash'],
-      );
-      $form['contact_id'] = array(
-        '#type' => 'value',
-        '#value' => $subscription['contact']['id'],
-      );
+  $form['contact_hash'] = array(
+    '#type' => 'value',
+    '#value' => $subscription['contact']['hash'],
+  );
+  $form['contact_id'] = array(
+    '#type' => 'value',
+    '#value' => $subscription['contact']['id'],
+  );
 
-      // Build form according to retrieved configuration:
-      // Add contact fields.
-      foreach ($profile['contact_fields'] as $contact_field_name => $contact_field) {
-        if ($contact_field['active']) {
-          $form[$contact_field_name] = array(
-            '#type' => _civicrm_newsletter_contact_field_types()[$contact_field['type']],
-            '#title' => $contact_field['label'],
-            '#description' => $contact_field['description'],
-            '#default_value' => $subscription['contact'][$contact_field_name],
-            '#required' => !empty($contact_field['required']),
-            '#disabled' => TRUE,
-          );
-          if (!empty($contact_field['options'])) {
-            $form[$contact_field_name]['#options'] = $contact_field['options'];
-            if (empty($contact_field['required'])) {
-              $form[$contact_field_name]['#empty_option'] = t('- None -');
-            }
-          }
+  // Build form according to retrieved configuration:
+  // Add contact fields.
+  foreach ($profile['contact_fields'] as $contact_field_name => $contact_field) {
+    if ($contact_field['active']) {
+      $form[$contact_field_name] = array(
+        '#type' => _civicrm_newsletter_contact_field_types()[$contact_field['type']],
+        '#title' => $contact_field['label'],
+        '#description' => $contact_field['description'],
+        '#default_value' => $subscription['contact'][$contact_field_name],
+        '#required' => !empty($contact_field['required']),
+        '#disabled' => TRUE,
+      );
+      if (!empty($contact_field['options'])) {
+        $form[$contact_field_name]['#options'] = $contact_field['options'];
+        if (empty($contact_field['required'])) {
+          $form[$contact_field_name]['#empty_option'] = t('- None -');
         }
       }
-
-      // Add mailing lists selection.
-      $form['mailing_lists'] = _civicrm_newsletter_mailing_lists_tree_checkboxes(
-        $profile['mailing_lists_tree'],
-        $subscription['subscription_status']
-      );
-      $form['mailing_lists']['#title'] = $profile['mailing_lists_label'];
-      $form['mailing_lists']['#description'] = $profile['mailing_lists_description'];
-      $form['mailing_lists']['#attributes'] = array(
-        'class' => array(
-          'form-item-mailing-lists',
-        ),
-      );
-      $form['mailing_lists']['#attached'] = array(
-        'js' => array(
-          drupal_get_path('module', 'civicrm_newsletter') . '/js/civicrm_newsletter.js',
-        )
-      );
-
-      // Add terms and conditions.
-      if (!empty($profile['conditions_preferences'])) {
-        $form['conditions_preferences'] = array(
-          '#type' => 'textarea',
-          '#title' => $profile['conditions_preferences_label'],
-          '#description' => $profile['conditions_preferences_description'],
-          '#value' => $profile['conditions_preferences'],
-          '#disabled' => TRUE,
-        );
-      }
-
-      // Add submit button with configured label, if given.
-      $form['submit'] = array(
-        '#type' => 'submit',
-        '#value' => $profile['submit_label'] ?: t('Submit'),
-      );
     }
   }
+
+  // Add mailing lists selection.
+  $form['mailing_lists'] = _civicrm_newsletter_mailing_lists_tree_checkboxes(
+    $profile['mailing_lists_tree'],
+    $subscription['subscription_status']
+  );
+  $form['mailing_lists']['#title'] = $profile['mailing_lists_label'];
+  $form['mailing_lists']['#description'] = $profile['mailing_lists_description'];
+  $form['mailing_lists']['#attributes'] = array(
+    'class' => array(
+      'form-item-mailing-lists',
+    ),
+  );
+  $form['mailing_lists']['#attached'] = array(
+    'js' => array(
+      drupal_get_path('module', 'civicrm_newsletter') . '/js/civicrm_newsletter.js',
+    )
+  );
+
+  // Add terms and conditions.
+  if (!empty($profile['conditions_preferences'])) {
+    $form['conditions_preferences'] = array(
+      '#type' => 'textarea',
+      '#title' => $profile['conditions_preferences_label'],
+      '#description' => $profile['conditions_preferences_description'],
+      '#value' => $profile['conditions_preferences'],
+      '#disabled' => TRUE,
+    );
+  }
+
+  // Add submit button with configured label, if given.
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => $profile['submit_label'] ?: t('Submit'),
+  );
 
   return $form;
 }
